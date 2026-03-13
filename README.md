@@ -80,3 +80,19 @@ This project has been refactored to align with 2026 TypeScript best practices:
 - **Type Safety:** Strict TypeScript configuration, Zod validation for all inputs, and removal of `any` types.
 - **Clean Architecture:** Source files are kept clean (no generated `.js`/`.d.ts` in `src/`), with build artifacts isolated in `dist/`.
 - **Security:** Secrets are managed via environment variables (e.g., `ADMIN_PASSWORD`), and database connections are safely handled in `finally` blocks.
+
+## Claude code Integration
+
+start the server using the following command:
+
+```bash
+npm run dev
+```
+
+add the server to Claude's MCP client with:
+
+```bash
+claude mcp add sqlite-explorer -- npx tsx /Users/matthew/projects/meirongdev/mcp-sqlite-server-advanced/src/run-stdio.ts
+```
+
+![mcp client](./docs/img/screenshot.jpg)

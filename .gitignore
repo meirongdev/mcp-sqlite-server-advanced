@@ -52,3 +52,4 @@ src/**/*.d.ts
 
 # Local generated database (kept out of repo)
 src/database.db
+.aider*
