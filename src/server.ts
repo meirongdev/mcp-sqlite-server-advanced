@@ -61,6 +61,7 @@ server.registerResource(
     list: async () => {
       const db = getDb();
       try {
+        // List all tables in the database to populate the resource list
         const tables = await db.all(
           "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
         );
