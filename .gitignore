@@ -44,5 +44,11 @@ lerna-debug.log*
 *.d.ts.map
 **/*.d.ts.map
 
+# Exclude compiled JS/D.TS if accidentally generated in source
+src/**/*.js
+src/**/*.d.ts
+!src/**/*.ts
+!src/**/*.d.ts.map # We already ignore .map above, but keeping explicit for clarity
+
 # Local generated database (kept out of repo)
 src/database.db

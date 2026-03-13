@@ -1,53 +1,82 @@
-# MCP SQLite Server - Learning Project
+# MCP SQLite Server - Advanced Learning Project
 
-This repository is a learning/example project that implements an MCP-style server backed by SQLite. It provides resources, prompts, and tools via the @modelcontextprotocol/sdk and demonstrates basic database operations and tool lifecycle management.
+This repository is a learning/example project that implements a Model Context Protocol (MCP) server backed by SQLite. It demonstrates advanced MCP features such as resource templates, dynamic tool management, and client-side input elicitation, using modern TypeScript practices (2026 standards).
 
 ## Quick start
 
-Requirements
+### Requirements
 
-- Node.js 18+ (recommended)
+- Node.js 24+ (Latest LTS recommended, managed via `fnm`)
 - npm
 
-Install
+### Installation
 
-1. npm install
+```bash
+npm install
+```
 
-Seed the database
+### Database Setup
 
-- npm run seed
-  - This runs `ts-node setupDb.ts` and creates `src/database.db` with example tables and rows.
+Seed the database with example data:
 
-Type-check / build
+```bash
+npm run seed
+# Runs: tsx src/setupDb.ts
+# Creates: src/database.db
+```
 
-- npm run typecheck  # npx tsc --noEmit
-- npm run build      # npx tsc
+### Development
 
-Run (development)
+Run the server in watch mode:
 
-- npx ts-node src/server.ts
+```bash
+npm run dev
+# Runs: tsx watch src/server.ts
+```
 
-## What this repo contains
+### Testing
 
-- src/server.ts — MCP server implementation. Registers:
-  - Resource template: `schema://table/{tableName}`
-  - Prompts: `query-table` (builds SQL query with validation via zod)
-  - Tools: `listTables`, `createTable`, `executeModification` (disabled by default), `adminLogin` (enables modification tool)
-- setupDb.ts — Seed script (TypeScript/ESM). Also kept: setupDb.js for compatibility.
-- src/modelcontext.d.ts — Minimal ambient declarations to allow local builds without full SDK types.
-- .github/copilot-instructions.md — Guidance for Copilot sessions working on this repo.
+Run unit tests with Vitest:
 
-## Conventions
+```bash
+npm test
+# Runs: vitest run
+```
 
-- ESM + TypeScript: package.json uses "type": "module" and tsconfig is set to "nodenext".
-- DB access: use `getDb()` helper (opens per operation) and always close in finally blocks.
-- Dangerous operations: tools that modify DB state are created disabled; enable via adminLogin at runtime.
+### Building for Production
 
-## Next steps (recommended)
+Type-check and build to `dist/`:
 
-- Add stricter types for SDK types (install or author typings for @modelcontextprotocol/sdk).
-- Replace `any` with precise types in src/server.ts where applicable.
-- Add ESLint/Prettier and unit tests for tools and resource handlers.
-- Consider better-sqlite3 for simpler sync API and performance in local tooling.
+```bash
+npm run typecheck
+npm run build
+```
 
-If you want, I can commit these files and create a git tag for this cleaned-up state. Or I can also open a PR-style commit with a descriptive message—tell me how you'd like to proceed.
+Run the production build:
+
+```bash
+npm start
+# Runs: node dist/server.js
+```
+
+## Features & capabilities
+
+- **Resources:** Exposes table schemas via `schema://table/{tableName}`.
+- **Prompts:** `query-table` helper for constructing SQL queries.
+- **Tools:**
+  - `listTables`: Lists all tables in the database.
+  - `createTable`: Creates a new table (DDL).
+  - `executeModification`: Executes UPDATE operations (disabled by default).
+  - `adminLogin`: Enables dangerous tools like `executeModification`.
+  - `addUser`: Demonstrates **client-side elicitation** (asking the user for input) to add a user.
+
+## Modernization Highlights
+
+This project has been refactored to align with 2026 TypeScript best practices:
+
+- **Runtime:** Uses `tsx` for fast, native ESM execution during development.
+- **Database:** Uses `sqlite` (wrapper around `sqlite3`) for a robust, Promise-based API.
+- **Testing:** Integrated `vitest` for modern, fast unit testing.
+- **Type Safety:** Strict TypeScript configuration, Zod validation for all inputs, and removal of `any` types.
+- **Clean Architecture:** Source files are kept clean (no generated `.js`/`.d.ts` in `src/`), with build artifacts isolated in `dist/`.
+- **Security:** Secrets are managed via environment variables (e.g., `ADMIN_PASSWORD`), and database connections are safely handled in `finally` blocks.

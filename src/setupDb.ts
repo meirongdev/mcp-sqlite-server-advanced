@@ -1,33 +1,49 @@
+import { open } from 'sqlite';
 import sqlite3 from 'sqlite3';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-// ESM: __dirname replacement
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const sqlite = sqlite3.verbose();
-// This ensures the database is created inside the 'src' folder
-const dbPath = path.join(__dirname, 'database.db');
-const db = new sqlite.Database(dbPath);
+async function setup() {
+  const dbPath = path.join(__dirname, 'database.db');
+  console.log(`Setting up database at ${dbPath}...`);
 
-db.serialize(() => {
-  console.log("Creating tables...");
-  db.run("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT UNIQUE)");
-  db.run("CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, name TEXT, price REAL)");
-  console.log("Populating 'users' table...");
-  const userStmt = db.prepare("INSERT OR IGNORE INTO users (name, email) VALUES (?, ?)");
-  userStmt.run("Alice", "alice@example.com");
-  userStmt.run("Bob", "bob@example.com");
-  userStmt.finalize();
-  console.log("Populating 'products' table...");
-  const productStmt = db.prepare("INSERT OR IGNORE INTO products (name, price) VALUES (?, ?)");
-  productStmt.run("Laptop Pro", 1200.50);
-  productStmt.run("Wireless Mouse", 25.00);
-  productStmt.finalize();
-});
+  const db = await open({
+    filename: dbPath,
+    driver: sqlite3.Database,
+  });
 
-db.close((err: Error | null) => {
-  if (err) console.error(err.message);
-  else console.log(`Database is set up inside ${dbPath}`);
-});
+  try {
+    console.log("Creating tables...");
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        price REAL NOT NULL
+      );
+    `);
+
+    console.log("Populating tables...");
+    await Promise.all([
+      db.run("INSERT OR IGNORE INTO users (name, email) VALUES (?, ?)", ["Alice", "alice@example.com"]),
+      db.run("INSERT OR IGNORE INTO users (name, email) VALUES (?, ?)", ["Bob", "bob@example.com"]),
+      db.run("INSERT OR IGNORE INTO products (name, price) VALUES (?, ?)", ["Laptop Pro", 1200.50]),
+      db.run("INSERT OR IGNORE INTO products (name, price) VALUES (?, ?)", ["Wireless Mouse", 25.00]),
+    ]);
+
+    console.log("Database setup complete.");
+  } catch (error) {
+    console.error("Setup failed:", error);
+    process.exit(1);
+  } finally {
+    await db.close();
+  }
+}
+
+setup();

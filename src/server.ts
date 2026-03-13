@@ -1,72 +1,89 @@
-import path from 'path';
-import * as sqlite3 from 'sqlite3';
-import { promisify } from 'util';
-import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { open, type Database } from 'sqlite';
+import sqlite3 from 'sqlite3';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { EventEmitter } from 'node:events';
 
-const sqlite = sqlite3.verbose();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // 1. Initialize the McpServer
 export const server = new McpServer({
   name: 'sqlite-explorer-server-advanced',
   version: '1.0.0',
-  // 2. Declare Server Capabilities
-  capabilities: {
-    roots: {}, // Server requests roots from client
-    prompts: { listChanged: true }, // Server provides prompts and sends notifications
-    resources: { listChanged: true, subscribe: true }, // Server provides resources with notifications and subscriptions
-    tools: { listChanged: true }, // Server provides tools and sends notifications
-    elicitation: {}, // Server requests user input from client
-  },
 });
 
-// 3. Create a Database Helper
-export const getDb = (readOnly = true) => {
-  // prefer environment override; default to a database file next to this module
-  const dbPath = process.env.DB_PATH || path.join(__dirname, 'database.db');
-  const mode = readOnly
-    ? sqlite.OPEN_READONLY
-    : sqlite.OPEN_READWRITE | sqlite.OPEN_CREATE;
-
-  const db = new sqlite.Database(dbPath, mode, (err: Error | null) => {
-    if (err) {
-      // surface error early
-      console.error(`Failed to open DB at ${dbPath}:`, err.message);
-      throw err;
-    }
-  });
-
-  const run = (sql: string, params: any[] = []) => {
-    return new Promise<{ changes: number; lastID: number }>((resolve, reject) => {
-      db.run(sql, params, function (err: Error | null) {
-        if (err) return reject(err);
-        // `this` is the Statement context provided by sqlite3
-        const info: any = this as any;
-        resolve({ changes: info?.changes ?? 0, lastID: info?.lastID ?? 0 });
-      });
-    });
-  };
-
-  return {
-    all: promisify(db.all.bind(db)) as (sql: string, params?: any[]) => Promise<any[]>,
-    run,
-    close: promisify(db.close.bind(db)) as () => Promise<void>,
-    instance: db,
-  };
+// Helper for internal access in tests/notifications
+// Note: These are private in the SDK but needed for this advanced implementation
+type InternalMcpServer = McpServer & {
+  _registeredResourceTemplates: Map<string, any>;
+  _registeredTools: Map<string, any>;
+  _registeredPrompts: Map<string, any>;
 };
+
+const internalServer = server as unknown as InternalMcpServer;
+
+// Local event bus
+const localEvents = new EventEmitter();
+
+// Typed Notification helpers
+export const notifyResourceListChanged = () => {
+  const sdkServer = server.server;
+  if (typeof (sdkServer as any).sendResourceListChanged === 'function') {
+    (sdkServer as any).sendResourceListChanged();
+  } else {
+    localEvents.emit('resourceListChanged');
+  }
+};
+
+export const onResourceListChanged = (listener: () => void) => localEvents.on('resourceListChanged', listener);
+
+export const notifyToolListChanged = () => {
+  const sdkServer = (server as any).server as any;
+  if (sdkServer && typeof sdkServer.sendToolListChanged === 'function') {
+    sdkServer.sendToolListChanged();
+  } else {
+    localEvents.emit('toolListChanged');
+  }
+};
+
+export const onToolListChanged = (listener: () => void) => localEvents.on('toolListChanged', listener);
+
+export const notifyResourceUpdated = (uri: string) => {
+  const sdkServer = (server as any).server as any;
+  const payload = { uri, title: `Resource updated: ${uri}` };
+  if (sdkServer && typeof sdkServer.sendResourceUpdated === 'function') {
+    sdkServer.sendResourceUpdated(payload);
+  } else {
+    localEvents.emit('resourceUpdated', payload);
+  }
+};
+
+// 3. Create a Database Helper using async/await and sqlite wrapper
+export const getDbConnection = async (readOnly = true): Promise<Database> => {
+  const dbPath = process.env['DB_PATH'] ?? path.join(__dirname, 'database.db');
+  
+  return open({
+    filename: dbPath,
+    driver: sqlite3.Database,
+    mode: readOnly ? sqlite3.OPEN_READONLY : (sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE),
+  });
+};
+
+// --- Resources ---
 
 server.registerResource(
   'table-schema',
   new ResourceTemplate('schema://table/{tableName}', {
     list: async () => {
-      const db = getDb();
+      const db = await getDbConnection();
       try {
-        // List all tables in the database to populate the resource list
-        const tables = await db.all(
+        const tables = await db.all<{ name: string }[]>(
           "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
         );
         return {
-          resources: tables.map((t: { name: string }) => ({
+          resources: tables.map((t) => ({
             uri: `schema://table/${t.name}`,
             name: t.name,
             title: `Schema for ${t.name}`,
@@ -78,16 +95,15 @@ server.registerResource(
         await db.close();
       }
     },
-    // The complete function provides autocomplete for template variables
     complete: {
-      tableName: async (value: any) => {
-        const db = getDb();
+      tableName: async (value: string) => {
+        const db = await getDbConnection();
         try {
-          const tables = await db.all(
+          const tables = await db.all<{ name: string }[]>(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
           );
           return tables
-            .map((t: { name: string }) => t.name)
+            .map((t) => t.name)
             .filter((name) => name.startsWith(value));
         } finally {
           await db.close();
@@ -98,84 +114,67 @@ server.registerResource(
   {
     title: 'Table Schema',
     description: 'Returns the SQL CREATE statement for a specific table.',
-    annotations: {
-      audience: ['user', 'assistant'],
-      priority: 0.8,
-    },
   },
-  async (uri: any, { tableName }: any) => {
-    const db = getDb();
+  async (uri, { tableName }) => {
+    const db = await getDbConnection();
     try {
-      const result = await db.all(
+      const result = await db.get<{ sql: string }>(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?",
         [tableName]
       );
-      if (result.length === 0) {
+      if (!result) {
         throw new Error(`Table '${tableName}' not found.`);
       }
-      // SDK types require uri in content, even though spec says it's redundant
-      return { contents: [{ uri: uri.href, text: result[0].sql }] };
+      return { contents: [{ uri: uri.href, text: result.sql }] };
     } finally {
       await db.close();
     }
   }
 );
+
+// --- Prompts ---
+
+const QueryTableSchema = z.object({
+  tableName: z.string().describe('The name of the table to query.'),
+  columns: z.string().optional().describe('Comma-separated list of columns to select.'),
+  filter: z.string().optional().describe('Optional WHERE clause to filter rows.'),
+  limit: z.string().optional().describe('Maximum number of rows to return.'),
+});
 
 server.registerPrompt(
   'query-table',
   {
     title: 'Query Table',
     description: 'Helps construct a SQL query to retrieve data from a specific table.',
-    argsSchema: {
-      tableName: z.string().describe('The name of the table to query.'),
-      columns: z
-        .string()
-        .optional()
-        .describe(
-          'Comma-separated list of columns to select. If not provided, all columns will be selected.'
-        ),
-      filter: z
-        .string()
-        .optional()
-        .describe('Optional WHERE clause to filter rows.'),
-      limit: z
-        .string()
-        .optional()
-        .describe('Maximum number of rows to return.'),
-    },
+    argsSchema: QueryTableSchema.shape,
   },
-  async ({ tableName, columns, filter, limit }: any) => {
-    const db = getDb();
+  async ({ tableName, columns, filter, limit }) => {
+    const db = await getDbConnection();
     try {
-      const columnList = columns || '*';
+      const columnList = columns ?? '*';
       let query = `SELECT ${columnList} FROM ${tableName}`;
-      if (filter) {
-        query += ` WHERE ${filter}`;
-      }
+      if (filter) query += ` WHERE ${filter}`;
+      
       if (limit) {
-        const limitNum = parseInt(limit, 10);
-        if (isNaN(limitNum) || limitNum <= 0) {
+        const limitNum = Number.parseInt(limit, 10);
+        if (Number.isNaN(limitNum) || limitNum <= 0) {
           throw new Error('Limit must be a positive number');
         }
         query += ` LIMIT ${limitNum}`;
       }
-      const rows = await db.all(query);
-      const tableInfo = await db.all(`PRAGMA table_info(${tableName})`);
+
+      const [rows, tableInfo] = await Promise.all([
+        db.all(query),
+        db.all(`PRAGMA table_info(${tableName})`),
+      ]);
+
       return {
         messages: [
           {
             role: 'user',
             content: {
               type: 'text',
-              text: `Query the ${tableName} table:\n\nTable Structure:\n${JSON.stringify(
-                tableInfo,
-                null,
-                2
-              )}\n\nSQL Query: ${query}\n\nResults:\n${JSON.stringify(
-                rows,
-                null,
-                2
-              )}`,
+              text: `Query the ${tableName} table:\n\nTable Structure:\n${JSON.stringify(tableInfo, null, 2)}\n\nSQL Query: ${query}\n\nResults:\n${JSON.stringify(rows, null, 2)}`,
             },
           },
         ],
@@ -187,9 +186,7 @@ server.registerPrompt(
             role: 'user',
             content: {
               type: 'text',
-              text: `Error querying table ${tableName}: ${
-                (err as Error).message
-              }`,
+              text: `Error querying table ${tableName}: ${err instanceof Error ? err.message : String(err)}`,
             },
           },
         ],
@@ -200,57 +197,43 @@ server.registerPrompt(
   }
 );
 
+// --- Tools ---
+
 server.registerTool(
   'listTables',
   {
     title: 'List Tables',
-    description:
-      'Lists all tables in the database, returning links to their schemas.',
+    description: 'Lists all tables in the database.',
     inputSchema: {
-      cursor: z
-        .string()
-        .optional()
-        .describe('The pagination cursor from a previous call.'),
+      cursor: z.string().optional().describe('Pagination cursor.'),
     },
   },
-  async ({ cursor }: any) => {
-    const db = getDb();
+  async ({ cursor }) => {
+    const db = await getDbConnection();
     try {
-      const tables = await db.all(
+      const tables = await db.all<{ name: string }[]>(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
       );
-      const page = parseInt(cursor ?? '0', 10);
-      const pageSize = 2;
+      const page = Number.parseInt(cursor ?? '0', 10);
+      const pageSize = 5;
       const start = page * pageSize;
-      const end = start + pageSize;
-      const paginatedTables = tables.slice(start, end);
-      const nextCursor =
-        end < tables.length ? (page + 1).toString() : undefined;
+      const paginatedTables = tables.slice(start, start + pageSize);
+      const nextCursor = (start + pageSize) < tables.length ? (page + 1).toString() : undefined;
+
       return {
         content: [
           { type: 'text', text: `Found ${tables.length} tables:` },
-          ...paginatedTables.map((t: { name: string }) => ({
+          ...paginatedTables.map((t) => ({
             type: 'resource' as const,
             resource: {
               type: 'resource',
-              uri: `schema://table/${t.name}`, // URI matches our resource template
+              uri: `schema://table/${t.name}`,
               name: t.name,
-              description: `Schema for the '${t.name}' table.`,
               text: t.name,
             },
           })),
         ],
-        nextCursor, // Signal to the client that more data is available
-      };
-    } catch (err) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Error listing tables: ${(err as Error).message}`,
-          },
-        ],
-        isError: true,
+        nextCursor,
       };
     } finally {
       await db.close();
@@ -265,32 +248,20 @@ server.registerTool(
     description: 'Creates a new table in the database.',
     inputSchema: {
       tableName: z.string().describe('The name of the new table.'),
-      columns: z
-        .string()
-        .describe('A comma-separated list of column definitions.'),
+      columns: z.string().describe('A comma-separated list of column definitions.'),
     },
   },
-  async ({ tableName, columns }: any) => {
-    const db = getDb(false); // Open in read-write mode
+  async ({ tableName, columns }) => {
+    const db = await getDbConnection(false);
     try {
       await db.run(`CREATE TABLE ${tableName} (${columns})`);
-      // Notify the client that the list of resources has changed
-      server.server.sendResourceListChanged();
+      notifyResourceListChanged();
       return {
-        content: [
-          { type: 'text', text: `Table '${tableName}' created successfully.` },
-        ],
+        content: [{ type: 'text', text: `Table '${tableName}' created successfully.` }],
       };
     } catch (err) {
       return {
-        content: [
-          {
-            type: 'text',
-            text: `Error creating table '${tableName}': ${
-              (err as Error).message
-            }`,
-          },
-        ],
+        content: [{ type: 'text', text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
         isError: true,
       };
     } finally {
@@ -299,96 +270,77 @@ server.registerTool(
   }
 );
 
-const executeModificationTool = server.registerTool(
+const modificationTool = server.registerTool(
   'executeModification',
   {
-    title: 'Execute Data Modification',
-    description: `Executes an UPDATE operation. Example: operation: 'UPDATE', tableName: 'users', set: "name = 'new_name'", where: "id = 1".`,
+    title: 'Execute Modification',
+    description: 'Performs UPDATE operations.',
     inputSchema: {
-      operation: z.enum(['UPDATE']).describe('The modification operation to perform.'),
-      tableName: z.string().describe('The name of the table to modify.'),
-      set: z.string().optional().describe('The SET clause for UPDATEs.'),
-      where: z.string().optional().describe('The WHERE clause for UPDATEs.'),
+      operation: z.enum(['UPDATE']),
+      tableName: z.string(),
+      set: z.string(),
+      where: z.string(),
     },
   },
-  async ({ operation, tableName, set, where }: any) => {
-    const db = getDb(false);  // Not read-only
+  async ({ tableName, set, where }) => {
+    const db = await getDbConnection(false);
     try {
-      if (operation === 'UPDATE') {
-        if (!set || !where) {
-          throw new Error('UPDATE operations require SET and WHERE clauses.');
-        }
-        await db.run(`UPDATE ${tableName} SET ${set} WHERE ${where}`);
-        // Notify clients that this specific resource may have changed
-        server.server.sendResourceUpdated({
-          uri: `schema://table/${tableName}`,
-          title: `Schema for ${tableName} (updated)`,
-        });
-      }
+      await db.run(`UPDATE ${tableName} SET ${set} WHERE ${where}`);
+      notifyResourceUpdated(`schema://table/${tableName}`);
+      return { content: [{ type: 'text', text: 'Update successful.' }] };
+    } finally {
       await db.close();
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Successfully executed ${operation} on table ${tableName}.`,
-          },
-        ],
-      };
-    } catch (err) {
-      await db.close();
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Error executing ${operation} on table ${tableName}: ${(err as Error).message}`,
-          },
-        ],
-        isError: true,
-      };
     }
   }
 );
-// Initially, the dangerous tool is disabled
-executeModificationTool.disable();
-// A tool to "log in" and enable the modification tool
+modificationTool.disable();
+
 server.registerTool(
-  'adminLogin',
+  'addUser',
   {
-    title: 'Admin Login',
-    description: 'Logs in as an admin to enable data modification tools.',
-    inputSchema: { password: z.string() },
+    title: 'Add User',
+    description: 'Adds a new user by asking for their info.',
+    inputSchema: z.object({}).shape,
   },
-  async ({ password }: any) => {
-    // Security Note: In production, use environment variables or secure credential storage
-    // This hardcoded password is for demonstration purposes only
-    if (password === 'secret-password') {
-      await executeModificationTool.enable();  // Enable the tool
-      // Notify clients that the list of available tools has changed
-      server.server.sendToolListChanged();
-      // Advanced: Server requests information FROM the client
-      server.server
-        .request(
-          {
-            method: 'roots/list',
-            params: {},
+  async () => {
+    const userInfo = await (server as any).server.request(
+      {
+        method: 'elicitation/create',
+        params: {
+          message: "Please provide user info.",
+          requestedSchema: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              email: { type: 'string' },
+            },
+            required: ['name', 'email'],
           },
-          z.any()
-        )
-        .then((roots: any) => {
-          console.log('Received roots from client:', roots.roots);
-        });
-      return {
-        content: [
-          {
-            type: 'text',
-            text: "Admin access granted. The 'executeModification' tool is now available.",
-          },
-        ],
-      };
+        },
+      },
+      z.object({
+        action: z.enum(['accept', 'reject']),
+        content: z.object({
+          name: z.string(),
+          email: z.string(),
+        }).optional(),
+      })
+    );
+
+    if (userInfo.action !== 'accept' || !userInfo.content) {
+      return { content: [{ type: 'text', text: 'Cancelled.' }] };
     }
-    return {
-      content: [{ type: 'text', text: 'Error: Invalid password.' }],
-      isError: true,
-    };
+
+    const db = await getDbConnection(false);
+    try {
+      await db.run('INSERT INTO users (name, email) VALUES (?, ?)', [
+        userInfo.content.name,
+        userInfo.content.email,
+      ]);
+      notifyResourceListChanged();
+      return { content: [{ type: 'text', text: `User ${userInfo.content.name} added.` }] };
+    } finally {
+      await db.close();
+    }
   }
 );
