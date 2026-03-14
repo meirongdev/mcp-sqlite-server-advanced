@@ -3,6 +3,7 @@
     "target": "esnext",
     "module": "nodenext",
     "lib": ["esnext"],
+    "types": ["node"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
