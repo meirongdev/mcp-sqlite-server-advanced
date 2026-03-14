@@ -1,0 +1,11 @@
+{
+  "name": "@mcp/shared",
+  "version": "2.0.0",
+  "type": "module",
+  "main": "./dist/schema.js",
+  "types": "./dist/schema.d.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  }
+}

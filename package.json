@@ -1,34 +1,36 @@
 {
   "name": "mcp-sqlite-server-advanced",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "typecheck": "tsc --noEmit",
-    "build": "tsc",
-    "seed": "tsx src/setupDb.ts",
-    "start": "node --enable-source-maps dist/server.js",
-    "dev": "tsx watch src/server.ts",
-    "test": "vitest run"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "version": "2.0.0",
+  "description": "MCP SQLite Server with LM Studio Client - Advanced Learning Project",
+  "private": true,
   "type": "module",
+  "workspaces": [
+    "shared",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @mcp/shared && npm run build --workspaces",
+    "typecheck": "npm run build -w @mcp/shared && npm run typecheck --workspaces",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "dev:server": "npm run dev -w @mcp/server",
+    "dev:client": "npm run dev -w @mcp/client",
+    "seed": "npm run seed -w @mcp/server",
+    "start:server": "npm run start -w @mcp/server",
+    "start:client": "npm run start -w @mcp/client",
+    "clean": "rm -rf packages/*/dist shared/dist",
+    "lint": "biome check --write",
+    "lint:check": "biome check",
+    "format": "biome format --write",
+    "format:check": "biome format"
+  },
   "engines": {
     "node": ">=24.14.0"
   },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.27.1",
-    "express": "^5.2.1",
-    "sqlite": "^5.1.1",
-    "sqlite3": "^6.0.1",
-    "zod": "^4.3.6"
-  },
   "devDependencies": {
-    "@types/express": "^5.0.6",
+    "@biomejs/biome": "2.4.7",
     "@types/node": "^25.5.0",
-    "@types/sqlite3": "^5.1.0",
+    "@vitest/coverage-v8": "^4.1.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"

@@ -1,12 +1,7 @@
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { open, type Database } from 'sqlite';
-import sqlite3 from 'sqlite3';
+import { EventEmitter } from 'node:events';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { EventEmitter } from 'node:events';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { getDbConnection } from './db.js';
 
 // 1. Initialize the McpServer
 export const server = new McpServer({
@@ -15,7 +10,6 @@ export const server = new McpServer({
 });
 
 // Helper for internal access in tests/notifications
-// Note: These are private in the SDK but needed for this advanced implementation
 type InternalMcpServer = McpServer & {
   _registeredResourceTemplates: Map<string, any>;
   _registeredTools: Map<string, any>;
@@ -27,6 +21,10 @@ const internalServer = server as unknown as InternalMcpServer;
 // Local event bus
 const localEvents = new EventEmitter();
 
+// Track modification tools state
+let modificationToolsEnabled = false;
+const modificationToolRefs: { enable?: () => void; disable?: () => void }[] = [];
+
 // Typed Notification helpers
 export const notifyResourceListChanged = () => {
   const sdkServer = server.server;
@@ -37,7 +35,8 @@ export const notifyResourceListChanged = () => {
   }
 };
 
-export const onResourceListChanged = (listener: () => void) => localEvents.on('resourceListChanged', listener);
+export const onResourceListChanged = (listener: () => void) =>
+  localEvents.on('resourceListChanged', listener);
 
 export const notifyToolListChanged = () => {
   const sdkServer = (server as any).server as any;
@@ -48,7 +47,8 @@ export const notifyToolListChanged = () => {
   }
 };
 
-export const onToolListChanged = (listener: () => void) => localEvents.on('toolListChanged', listener);
+export const onToolListChanged = (listener: () => void) =>
+  localEvents.on('toolListChanged', listener);
 
 export const notifyResourceUpdated = (uri: string) => {
   const sdkServer = (server as any).server as any;
@@ -60,15 +60,28 @@ export const notifyResourceUpdated = (uri: string) => {
   }
 };
 
-// 3. Create a Database Helper using async/await and sqlite wrapper
-export const getDbConnection = async (readOnly = true): Promise<Database> => {
-  const dbPath = process.env['DB_PATH'] ?? path.join(__dirname, 'database.db');
-  
-  return open({
-    filename: dbPath,
-    driver: sqlite3.Database,
-    mode: readOnly ? sqlite3.OPEN_READONLY : (sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE),
+/**
+ * Enable modification tools (called by adminLogin)
+ */
+export const enableModificationTools = () => {
+  if (modificationToolsEnabled) return;
+  modificationToolsEnabled = true;
+  modificationToolRefs.forEach((ref) => {
+    ref.enable?.();
   });
+  notifyToolListChanged();
+};
+
+/**
+ * Disable modification tools
+ */
+export const disableModificationTools = () => {
+  if (!modificationToolsEnabled) return;
+  modificationToolsEnabled = false;
+  modificationToolRefs.forEach((ref) => {
+    ref.disable?.();
+  });
+  notifyToolListChanged();
 };
 
 // --- Resources ---
@@ -102,9 +115,7 @@ server.registerResource(
           const tables = await db.all<{ name: string }[]>(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
           );
-          return tables
-            .map((t) => t.name)
-            .filter((name) => name.startsWith(value));
+          return tables.map((t) => t.name).filter((name) => name.startsWith(value));
         } finally {
           await db.close();
         }
@@ -154,7 +165,7 @@ server.registerPrompt(
       const columnList = columns ?? '*';
       let query = `SELECT ${columnList} FROM ${tableName}`;
       if (filter) query += ` WHERE ${filter}`;
-      
+
       if (limit) {
         const limitNum = Number.parseInt(limit, 10);
         if (Number.isNaN(limitNum) || limitNum <= 0) {
@@ -199,148 +210,40 @@ server.registerPrompt(
 
 // --- Tools ---
 
-server.registerTool(
-  'listTables',
-  {
-    title: 'List Tables',
-    description: 'Lists all tables in the database.',
-    inputSchema: {
-      cursor: z.string().optional().describe('Pagination cursor.'),
-    },
-  },
-  async ({ cursor }) => {
-    const db = await getDbConnection();
-    try {
-      const tables = await db.all<{ name: string }[]>(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-      );
-      const page = Number.parseInt(cursor ?? '0', 10);
-      const pageSize = 5;
-      const start = page * pageSize;
-      const paginatedTables = tables.slice(start, start + pageSize);
-      const nextCursor = (start + pageSize) < tables.length ? (page + 1).toString() : undefined;
+// Import tool handlers and definitions
+import {
+  addUserDefinition,
+  addUserHandler,
+  adminLoginDefinition,
+  adminLoginHandler,
+  createTableDefinition,
+  createTableHandler,
+  executeModificationDefinition,
+  executeModificationHandler,
+  listTablesDefinition,
+  listTablesHandler,
+} from './tools/index.js';
 
-      return {
-        content: [
-          { type: 'text', text: `Found ${tables.length} tables:` },
-          ...paginatedTables.map((t) => ({
-            type: 'resource' as const,
-            resource: {
-              type: 'resource',
-              uri: `schema://table/${t.name}`,
-              name: t.name,
-              text: t.name,
-            },
-          })),
-        ],
-        nextCursor,
-      };
-    } finally {
-      await db.close();
-    }
-  }
-);
+server.registerTool('listTables', listTablesDefinition, listTablesHandler);
 
-server.registerTool(
-  'createTable',
-  {
-    title: 'Create Table',
-    description: 'Creates a new table in the database.',
-    inputSchema: {
-      tableName: z.string().describe('The name of the new table.'),
-      columns: z.string().describe('A comma-separated list of column definitions.'),
-    },
-  },
-  async ({ tableName, columns }) => {
-    const db = await getDbConnection(false);
-    try {
-      await db.run(`CREATE TABLE ${tableName} (${columns})`);
-      notifyResourceListChanged();
-      return {
-        content: [{ type: 'text', text: `Table '${tableName}' created successfully.` }],
-      };
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
-        isError: true,
-      };
-    } finally {
-      await db.close();
-    }
-  }
-);
+server.registerTool('createTable', createTableDefinition, createTableHandler);
 
 const modificationTool = server.registerTool(
   'executeModification',
-  {
-    title: 'Execute Modification',
-    description: 'Performs UPDATE operations.',
-    inputSchema: {
-      operation: z.enum(['UPDATE']),
-      tableName: z.string(),
-      set: z.string(),
-      where: z.string(),
-    },
-  },
-  async ({ tableName, set, where }) => {
-    const db = await getDbConnection(false);
-    try {
-      await db.run(`UPDATE ${tableName} SET ${set} WHERE ${where}`);
-      notifyResourceUpdated(`schema://table/${tableName}`);
-      return { content: [{ type: 'text', text: 'Update successful.' }] };
-    } finally {
-      await db.close();
-    }
-  }
+  executeModificationDefinition,
+  executeModificationHandler
 );
 modificationTool.disable();
+modificationToolRefs.push(modificationTool);
 
-server.registerTool(
-  'addUser',
-  {
-    title: 'Add User',
-    description: 'Adds a new user by asking for their info.',
-    inputSchema: z.object({}).shape,
-  },
-  async () => {
-    const userInfo = await (server as any).server.request(
-      {
-        method: 'elicitation/create',
-        params: {
-          message: "Please provide user info.",
-          requestedSchema: {
-            type: 'object',
-            properties: {
-              name: { type: 'string' },
-              email: { type: 'string' },
-            },
-            required: ['name', 'email'],
-          },
-        },
-      },
-      z.object({
-        action: z.enum(['accept', 'reject']),
-        content: z.object({
-          name: z.string(),
-          email: z.string(),
-        }).optional(),
-      })
-    );
+server.registerTool('adminLogin', adminLoginDefinition, adminLoginHandler);
 
-    if (userInfo.action !== 'accept' || !userInfo.content) {
-      return { content: [{ type: 'text', text: 'Cancelled.' }] };
-    }
-
-    const db = await getDbConnection(false);
-    try {
-      await db.run('INSERT INTO users (name, email) VALUES (?, ?)', [
-        userInfo.content.name,
-        userInfo.content.email,
-      ]);
-      notifyResourceListChanged();
-      return { content: [{ type: 'text', text: `User ${userInfo.content.name} added.` }] };
-    } finally {
-      await db.close();
-    }
-  }
+server.registerTool('addUser', addUserDefinition, async (args) =>
+  addUserHandler(args, async (req, schema) => {
+    const sdkServer = (server as any).server as any;
+    return sdkServer.request(req, schema);
+  })
 );
+
+// Export for tests
+export { internalServer, localEvents };

@@ -1,0 +1,29 @@
+{
+  "name": "@mcp/server",
+  "version": "2.0.0",
+  "description": "MCP SQLite Server - SQLite database server with Model Context Protocol",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "seed": "tsx src/setupDb.ts",
+    "start": "node --enable-source-maps dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "dev:stdio": "tsx watch src/stdio.ts",
+    "dev:http": "tsx watch src/http.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@mcp/shared": "2.0.0",
+    "express": "^5.2.1",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^6.0.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6"
+  }
+}

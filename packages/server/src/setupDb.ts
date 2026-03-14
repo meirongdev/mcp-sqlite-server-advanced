@@ -1,7 +1,7 @@
-import { open } from 'sqlite';
-import sqlite3 from 'sqlite3';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { open } from 'sqlite';
+import sqlite3 from 'sqlite3';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -15,7 +15,7 @@ async function setup() {
   });
 
   try {
-    console.log("Creating tables...");
+    console.log('Creating tables...');
     await db.exec(`
       CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,17 +29,23 @@ async function setup() {
       );
     `);
 
-    console.log("Populating tables...");
+    console.log('Populating tables...');
     await Promise.all([
-      db.run("INSERT OR IGNORE INTO users (name, email) VALUES (?, ?)", ["Alice", "alice@example.com"]),
-      db.run("INSERT OR IGNORE INTO users (name, email) VALUES (?, ?)", ["Bob", "bob@example.com"]),
-      db.run("INSERT OR IGNORE INTO products (name, price) VALUES (?, ?)", ["Laptop Pro", 1200.50]),
-      db.run("INSERT OR IGNORE INTO products (name, price) VALUES (?, ?)", ["Wireless Mouse", 25.00]),
+      db.run('INSERT OR IGNORE INTO users (name, email) VALUES (?, ?)', [
+        'Alice',
+        'alice@example.com',
+      ]),
+      db.run('INSERT OR IGNORE INTO users (name, email) VALUES (?, ?)', ['Bob', 'bob@example.com']),
+      db.run('INSERT OR IGNORE INTO products (name, price) VALUES (?, ?)', ['Laptop Pro', 1200.5]),
+      db.run('INSERT OR IGNORE INTO products (name, price) VALUES (?, ?)', [
+        'Wireless Mouse',
+        25.0,
+      ]),
     ]);
 
-    console.log("Database setup complete.");
+    console.log('Database setup complete.');
   } catch (error) {
-    console.error("Setup failed:", error);
+    console.error('Setup failed:', error);
     process.exit(1);
   } finally {
     await db.close();

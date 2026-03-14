@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { server } from '../src/server.js';
+import { describe, expect, it } from 'vitest';
+import { server } from '../packages/server/src/server.js';
 
 describe('MCP Server Registration', () => {
   it('should have the correct name and version', () => {

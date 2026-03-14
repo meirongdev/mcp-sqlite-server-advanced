@@ -48,8 +48,15 @@ lerna-debug.log*
 src/**/*.js
 src/**/*.d.ts
 !src/**/*.ts
-!src/**/*.d.ts.map # We already ignore .map above, but keeping explicit for clarity
+!src/**/*.d.ts.map
 
-# Local generated database (kept out of repo)
+# Local generated databases (kept out of repo)
 src/database.db
+packages/server/src/database.db
+packages/server/dist/database.db
+
+# Aider
 .aider*
+
+# Coverage
+coverage/

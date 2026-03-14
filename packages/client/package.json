@@ -1,0 +1,26 @@
+{
+  "name": "@mcp/client",
+  "version": "2.0.0",
+  "description": "MCP Client with LM Studio integration for AI-powered SQLite queries",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "mcp-client": "./dist/cli.js"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "start": "node --enable-source-maps dist/cli.js",
+    "dev": "tsx watch src/cli.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mcp/shared": "2.0.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0"
+  }
+}
